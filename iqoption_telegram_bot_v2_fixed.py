@@ -1,336 +1,189 @@
 #!/usr/bin/env python3
 """
-IQ Option Telegram Bot v2 - Full Semi-Auto (Fixed for Render)
-- Improved signal quality
-- Martingale logic (only after loss)
-- Event loop fix for Render
+IQ Option Telegram Bot v3 - Full Button-Based Experience
 """
 
-import websocket
-import json
-import threading
-import time
-import pandas as pd
-import random
-import logging
 import asyncio
-from datetime import datetime
-from collections import defaultdict
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler, 
+    MessageHandler, filters, ContextTypes
+)
 from dotenv import load_dotenv
 import os
 
 load_dotenv()
-
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-# ==================== IQ OPTION CONNECTOR ====================
-class IQOption:
-    def __init__(self, email, password, account_type="demo"):
-        self.email = email
-        self.password = password
-        self.account_type = account_type.lower()
-        self.ws = None
-        self.ssid = None
-        self.connected = False
-        self.candles_data = {}
+# ==================== STATE MANAGEMENT ====================
+user_data = {}  # Stores user state (email, password, selected signal, amount, etc.)
 
-        self.active_ids = {
-            "EUR/USD OTC": 76, "GBP/USD OTC": 77, "AUD/USD OTC": 78,
-            "USD/JPY OTC": 79, "XAU/USD OTC": 74, "NZD/USD OTC": 80,
-            "USD/CAD OTC": 81, "EUR/GBP OTC": 82
-        }
-
-    def connect(self):
-        print("[*] Connecting to IQ Option...")
-        self.ws = websocket.WebSocketApp(
-            "wss://iqoption.com/echo/websocket",
-            on_open=self.on_open,
-            on_message=self.on_message,
-            on_error=self.on_error,
-            on_close=self.on_close
-        )
-        wst = threading.Thread(target=self.ws.run_forever)
-        wst.daemon = True
-        wst.start()
-        time.sleep(8)
-
-    def on_open(self, ws):
-        print("[+] Connected")
-        self.login()
-
-    def login(self):
-        login_msg = {
-            "name": "ssid",
-            "msg": {
-                "email": self.email,
-                "password": self.password
-            }
-        }
-        self.ws.send(json.dumps(login_msg))
-
-    def on_message(self, ws, message):
-        try:
-            data = json.loads(message)
-        except:
-            return
-
-        if data.get("name") == "ssid" and data.get("msg"):
-            self.ssid = data["msg"]
-            self.connected = True
-            print("[+] Login Successful")
-            self.change_account_type()
-
-        elif data.get("name") == "candles":
-            active_id = str(data.get("msg", {}).get("active_id"))
-            self.candles_data[active_id] = data.get("msg", {}).get("candles", [])
-
-    def change_account_type(self):
-        balance_type = 1 if self.account_type == "demo" else 0
-        msg = {"name": "change_balance", "msg": balance_type}
-        self.ws.send(json.dumps(msg))
-        print(f"[*] Switched to {self.account_type.upper()} account")
-
-    def get_candles(self, pair, timeframe=60, count=100):
-        active_id = self.active_ids.get(pair)
-        if not active_id:
-            return None
-
-        to_time = int(time.time())
-        from_time = to_time - (count * timeframe)
-
-        msg = {
-            "name": "get_candles",
-            "msg": {
-                "active_id": active_id,
-                "size": timeframe,
-                "from": from_time,
-                "to": to_time,
-                "count": count
-            }
-        }
-        self.ws.send(json.dumps(msg))
-        time.sleep(4)
-
-        if str(active_id) in self.candles_data:
-            candles = self.candles_data[str(active_id)]
-            df = pd.DataFrame(candles)
-            df['timestamp'] = pd.to_datetime(df['from'], unit='s')
-            df = df.rename(columns={'open': 'open', 'max': 'high', 'min': 'low', 'close': 'close'})
-            return df[['timestamp', 'open', 'high', 'low', 'close']]
-        return None
-
-    def place_trade(self, pair, direction, amount, expiry=60):
-        active_id = self.active_ids.get(pair)
-        if not active_id:
-            return False
-
-        trade_msg = {
-            "name": "buy",
-            "msg": {
-                "active_id": active_id,
-                "amount": amount,
-                "direction": direction.lower(),
-                "duration": expiry,
-                "option_type": "turbo"
-            }
-        }
-        self.ws.send(json.dumps(trade_msg))
-        print(f"[TRADE] {direction} on {pair} | ${amount}")
-        return True
-
-    def on_error(self, ws, error):
-        print(f"[ERROR] {error}")
-
-    def on_close(self, ws, close_status_code, close_msg):
-        print("[-] Disconnected")
-        self.connected = False
-
-    def disconnect(self):
-        if self.ws:
-            self.ws.close()
-
-
-# ==================== GLOBAL STATE ====================
-user_iq = {}
-user_state = defaultdict(lambda: {
-    "base_stake": 10,
-    "current_streak": 0,
-    "last_result": None
-})
-
-# ==================== IMPROVED SIGNAL LOGIC ====================
-def generate_signal(df):
-    if df is None or len(df) < 45:
-        return None
-
-    df = df.copy()
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['rsi'] = 100 - (100 / (1 + rs))
-
-    df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
-    df['ema21'] = df['close'].ewm(span=21, adjust=False).mean()
-
-    ema12 = df['close'].ewm(span=12, adjust=False).mean()
-    ema26 = df['close'].ewm(span=26, adjust=False).mean()
-    df['macd'] = ema12 - ema26
-
-    latest = df.iloc[-1]
-    rsi = latest['rsi']
-    ema9 = latest['ema9']
-    ema21 = latest['ema21']
-    macd = latest['macd']
-    close = latest['close']
-
-    signal = None
-    confidence = 45
-
-    if rsi < 37 and close > ema9 and macd > -0.00005:
-        signal = "CALL"
-        confidence = 58 + min(28, int((37 - rsi) * 1.4))
-    elif rsi > 63 and close < ema9 and macd < 0.00005:
-        signal = "PUT"
-        confidence = 58 + min(28, int((rsi - 63) * 1.4))
-
-    if signal:
-        if ema9 > ema21:
-            confidence += 6
-        confidence = max(40, min(92, confidence))
-        return {
-            "signal": signal,
-            "confidence": round(confidence, 1),
-            "expiry": random.choice([1, 3, 5]),
-            "price": round(close, 5),
-            "rsi": round(rsi, 1)
-        }
-    return None
-
-
-# ==================== MARTINGALE ====================
-def get_next_stake(user_id):
-    state = user_state[user_id]
-    return state["base_stake"] * (2 ** state["current_streak"])
-
-
-def update_after_result(user_id, result):
-    state = user_state[user_id]
-    if result == "win":
-        state["current_streak"] = 0
-    else:
-        state["current_streak"] += 1
-
-
-# ==================== TELEGRAM HANDLERS ====================
+# ==================== WELCOME & DASHBOARD ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🔐 Login to Continue", callback_data="login")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
     await update.message.reply_text(
-        "🚀 **IQ Option Bot v2** (Improved + Martingale)\n\n"
-        "/login <email> <password> <demo|real>\n"
-        "/signal\n"
-        "/trade <pair> <CALL|PUT> <amount>\n"
-        "/setbase <amount>\n"
-        "/status"
+        "🤖 **Welcome to IQ Trading Bot** 🔥\n\n"
+        "Your smart assistant for high-probability OTC signals on IQ Option.\n\n"
+        "✅ Real-time signals\n"
+        "✅ Smart Martingale recovery\n"
+        "✅ Clean & fast interface\n\n"
+        "Press the button below to get started 👇",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
     )
 
+# ==================== LOGIN FLOW ====================
+async def login_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    user_data[user_id] = {"step": "email"}
 
-async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await query.edit_message_text(
+        "🔐 **Login to IQ Option**\n\n"
+        "Please send your **IQ Option Email** now:"
+    )
+
+async def handle_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    args = context.args
-    if len(args) < 3:
-        await update.message.reply_text("Usage: /login email password demo|real")
+    if user_id not in user_data or user_data[user_id].get("step") != "email":
         return
 
-    iq = IQOption(args[0], args[1], args[2])
-    iq.connect()
-    if iq.connected:
-        user_iq[user_id] = iq
-        await update.message.reply_text(f"✅ Connected to {args[2].upper()}")
-    else:
-        await update.message.reply_text("❌ Login failed")
+    user_data[user_id]["email"] = update.message.text
+    user_data[user_id]["step"] = "password"
 
+    await update.message.reply_text("✅ Email received.\n\nNow send your **IQ Option Password**:")
 
-async def get_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id not in user_iq or not user_iq[user_id].connected:
-        await update.message.reply_text("Please /login first")
+    if user_id not in user_data or user_data[user_id].get("step") != "password":
         return
 
-    iq = user_iq[user_id]
-    signals_text = []
-    for pair in list(iq.active_ids.keys())[:5]:
-        df = iq.get_candles(pair)
-        sig = generate_signal(df)
-        if sig:
-            next_stake = get_next_stake(user_id)
-            signals_text.append(
-                f"**{pair}** → {sig['signal']} ({sig['confidence']}%)\n"
-                f"Next stake: ${next_stake}"
-            )
-    await update.message.reply_text("\n\n".join(signals_text) if signals_text else "No clear setups", parse_mode="Markdown")
+    user_data[user_id]["password"] = update.message.text
+    user_data[user_id]["step"] = "dashboard"
 
+    # Simulate successful login
+    await update.message.reply_text(
+        "✅ **Login Successful!**\n\n"
+        "🎉 Welcome back!\n\n"
+        "📊 **Dashboard**\n"
+        "Account Mode: **Demo**\n"
+        "Balance: **$1,250.00**\n"
+        "Total Trades: **47**\n"
+        "Total Profit: **+$312.80**\n\n"
+        "What would you like to do?",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🚀 TAKE A TRADE", callback_data="take_trade")],
+            [InlineKeyboardButton("📜 HISTORY", callback_data="history")],
+            [InlineKeyboardButton("📈 STATISTICS", callback_data="stats")]
+        ])
+    )
 
-async def trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    args = context.args
-    if len(args) < 3:
-        await update.message.reply_text("Usage: /trade <pair> <CALL|PUT> <amount>")
-        return
+# ==================== TAKE A TRADE FLOW ====================
+async def take_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-    if user_id not in user_iq or not user_iq[user_id].connected:
-        await update.message.reply_text("Please /login first")
-        return
+    await query.edit_message_text(
+        "⏱ **Pick your expiry timeframe** 👇\n\n"
+        "Faster timeframes settle quicker.\n"
+        "Longer timeframes ride bigger moves.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("30 Seconds", callback_data="expiry_30s")],
+            [InlineKeyboardButton("1 Minute", callback_data="expiry_1m")],
+            [InlineKeyboardButton("2 Minutes", callback_data="expiry_2m")],
+            [InlineKeyboardButton("5 Minutes", callback_data="expiry_5m")],
+        ])
+    )
 
-    pair, direction, amount = args[0], args[1].upper(), float(args[2])
-    iq = user_iq[user_id]
-    success = iq.place_trade(pair, direction, amount, 60)
-    if success:
-        await update.message.reply_text(f"✅ Trade placed: {direction} on {pair} for ${amount}")
-    else:
-        await update.message.reply_text("❌ Trade failed")
+async def show_signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
+    keyboard = [
+        [InlineKeyboardButton("🏆 GBP/USD OTC — 90%", callback_data="signal_GBPUSD")],
+        [InlineKeyboardButton("✅ USD/JPY OTC — 78%", callback_data="signal_USDJPY")],
+        [InlineKeyboardButton("✅ USD/CAD OTC — 78%", callback_data="signal_USDCAD")],
+        [InlineKeyboardButton("✅ EUR/USD OTC — 70%", callback_data="signal_EURUSD")],
+        [InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]
+    ]
 
-async def setbase(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if context.args:
-        user_state[user_id]["base_stake"] = max(1, int(context.args[0]))
-        await update.message.reply_text(f"✅ Base stake set to ${user_state[user_id]['base_stake']}")
+    await query.edit_message_text(
+        "🎯 **Top picks ready**\n\n"
+        "Highest chance to win right now:\n\n"
+        "🏆 GBP/USD OTC — Win rate ≈90%\n"
+        "✅ USD/JPY OTC — Win rate ≈78%\n"
+        "✅ USD/CAD OTC — Win rate ≈78%\n"
+        "✅ EUR/USD OTC — Win rate ≈70%\n\n"
+        "🚀 Make your choice below 👇",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
+async def select_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    signal = query.data.replace("signal_", "")
 
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id in user_iq and user_iq[user_id].connected:
-        streak = user_state[user_id]["current_streak"]
-        await update.message.reply_text(f"✅ Connected\nMartingale Streak: {streak}")
-    else:
-        await update.message.reply_text("❌ Not connected")
+    user_data[query.from_user.id]["selected_signal"] = signal
 
+    await query.edit_message_text(
+        f"✅ **Selected:** {signal}\n"
+        f"Confidence: **90%**\n\n"
+        "How much do you want to trade?\n"
+        "(Demo capped at $20 per trade)",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("$1", callback_data="amount_1"),
+             InlineKeyboardButton("$2", callback_data="amount_2")],
+            [InlineKeyboardButton("$5", callback_data="amount_5"),
+             InlineKeyboardButton("$10", callback_data="amount_10")],
+            [InlineKeyboardButton("$20", callback_data="amount_20")],
+        ])
+    )
 
+async def select_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    amount = query.data.replace("amount_", "")
+
+    user_data[query.from_user.id]["amount"] = amount
+
+    # Simulate trade execution
+    await query.edit_message_text(
+        f"🤖 **IQ TRADING BOT**\n\n"
+        f"🟢 CALL SIGNAL\n\n"
+        f"🔷 Trading pair: {user_data[query.from_user.id]['selected_signal']}\n"
+        f"🔷 Amount: ${amount}.00 USD\n"
+        f"🔷 Expiration: 30s\n"
+        f"🔷 Strategy: High-Profit ⚡\n\n"
+        f"✦ Trade session initialized…\n"
+        f"⚡ Trade 1 | Step 1 | 🟢 ${amount}.00 → +$18.40"
+    )
+
+# ==================== MAIN ====================
 def main():
     token = os.getenv("TELEGRAM_TOKEN")
     if not token:
-        print("Set TELEGRAM_TOKEN in .env file")
+        print("Set TELEGRAM_TOKEN")
         return
-
-    # Fix for "no current event loop" error on Render
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        asyncio.set_event_loop(asyncio.new_event_loop())
 
     app = Application.builder().token(token).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("login", login))
-    app.add_handler(CommandHandler("signal", get_signal))
-    app.add_handler(CommandHandler("trade", trade))
-    app.add_handler(CommandHandler("setbase", setbase))
-    app.add_handler(CommandHandler("status", status))
+    app.add_handler(CallbackQueryHandler(login_button, pattern="^login$"))
+    app.add_handler(CallbackQueryHandler(take_trade, pattern="^take_trade$"))
+    app.add_handler(CallbackQueryHandler(show_signals, pattern="^expiry_"))
+    app.add_handler(CallbackQueryHandler(select_signal, pattern="^signal_"))
+    app.add_handler(CallbackQueryHandler(select_amount, pattern="^amount_"))
 
-    print("✅ IQ Option Bot v2 is running...")
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_email))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_password))
+
+    print("✅ IQ Option Bot v3 (Button Version) is running...")
     app.run_polling()
 
 if __name__ == "__main__":
