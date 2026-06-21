@@ -333,11 +333,9 @@ def main():
     print("✅ IQ Option Bot v2 is running...")
     app.run_polling()
 
-
 if __name__ == "__main__":
     main()
 ``` 
-
 **This version includes the event loop fix.**
 
 Replace your current file with this one on GitHub, then redeploy on Render with **Clear build cache**. 
