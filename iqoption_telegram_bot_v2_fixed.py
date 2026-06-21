@@ -335,8 +335,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-**This version includes the event loop fix.**
-
-Replace your current file with this one on GitHub, then redeploy on Render with **Clear build cache**. 
-
-Let me know if you still get any errors after this.
