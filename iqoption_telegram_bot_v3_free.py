@@ -219,22 +219,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-``` 
-
-**This is the complete file** with both fixes included:
-
-- Event loop fix (top)
-- Dummy port server (for Render free tier)
-
-### What to do now:
-
-1. Replace your current file with `iqoption_telegram_bot_v3_free.py`
-2. Push to GitHub
-3. On Render:
-   - Keep it as **Web Service**
-   - Set **Start Command** to: `python iqoption_telegram_bot_v3_free.py`
-   - Redeploy with **Clear build cache**
-
-This should finally stop the port scan error on the free tier.
-
-Let me know how it goes after redeploying!
