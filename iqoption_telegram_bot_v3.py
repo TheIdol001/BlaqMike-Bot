@@ -198,12 +198,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-``` 
-
-**This is the complete updated file** with the event loop fix already included at the top.
-
-### Next Steps:
-1. Replace your current file on GitHub with this one.
-2. Redeploy on Render with **Clear build cache & deploy**.
-
-Let me know if you still get any errors after this.
