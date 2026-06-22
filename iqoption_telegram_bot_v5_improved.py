@@ -328,18 +328,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-``` 
-
-**This version has better connection handling.**
-
-### Key Improvements:
-- Increased timeout from 8s → **15 seconds**
-- Clearer error message when login fails
-- Better logging (you can check Render logs for `[IQ ERROR]` or connection status)
-
-### What to do now:
-1. Replace your current file with this new one.
-2. Push to GitHub.
-3. Redeploy on Render with **Clear build cache**.
-
-Test the login again after redeploying and tell me what happens.
