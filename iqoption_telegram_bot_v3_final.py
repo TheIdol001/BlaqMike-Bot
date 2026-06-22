@@ -218,14 +218,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-``` 
-
-**This is the complete fixed file.**
-
-### Key Improvements:
-- Fixed password not responding bug (now uses one clean `handle_text` handler)
-- Event loop fix included
-- Dummy port for Render free tier included
 
 ### What to do:
 1. Replace your current file with this new `iqoption_telegram_bot_v3_final.py`
