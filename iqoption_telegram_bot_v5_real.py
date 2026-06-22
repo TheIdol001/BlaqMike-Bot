@@ -323,19 +323,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-``` 
-
-**This is the new version with real IQ Option connection.**
-
-### What it does now:
-- Real login to IQ Option (Demo)
-- Shows **real balance** on Dashboard
-- Generates **high probability signals** from real candle data
-- Only shows signals with **65%+ confidence**
-
-### Next Steps:
-1. Replace your current file with this new one.
-2. Push to GitHub.
-3. Redeploy on Render.
-
-Would you like me to also add **trade confirmation + place real trade** functionality next? Or test this version first?
