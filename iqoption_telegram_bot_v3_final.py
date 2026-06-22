@@ -218,10 +218,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-### What to do:
-1. Replace your current file with this new `iqoption_telegram_bot_v3_final.py`
-2. Push to GitHub
-3. Redeploy on Render with **Clear build cache**
-
-Try logging in again after redeploying and let me know if the password step works now.
