@@ -291,19 +291,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-``` 
-
-**This is the stable version.**
-
-It has:
-- Clean button interface
-- Good signal quality logic
-- Working TAKE A TRADE flow with simulated but realistic results
-- No dependency on unstable IQ Option connection
-
-### Next Steps:
-1. Replace your current file with this one.
-2. Push to GitHub.
-3. Redeploy on Render.
-
-Would you like me to also improve the signal quality further or add Martingale recovery in the next update?
